@@ -2,71 +2,45 @@ name: Go Build and Release
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    # 通常在主分支推送标签时触发发布，例如 v1.0.0
+    tags: [ 'v*' ]
+  # 允许在 GitHub 界面手动触发工作流
+  workflow_dispatch:
+  # 监听 Release 的发布事件（另一种常见触发方式）
   release:
-    types: [created]
+    types: [published]
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      # 赋予工作流创建 Release 和上传资产的权限
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 获取所有历史记录，用于版本检测
+          # 获取全部历史记录，以便 `git describe` 能正确生成版本号
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.23'
 
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Build for all platforms
+      - name: Run Makefile to build all platforms
         run: make build-all
 
-      - name: List built files
-        run: find dist -type f -name "joystick-gpio*" | sort
-
-      - name: Upload artifacts
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: joystick-gpio-binaries
-          path: dist/
-          retention-days: 7
-
-  release:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'release'
-    
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: joystick-gpio-binaries
-          path: dist
-
-      - name: Create release packages
-        run: |
-          cd dist
-          for dir in */; do
-            if [ -d "$dir" ]; then
-              platform=$(basename "$dir")
-              if [[ "$platform" == *"windows"* ]]; then
-                zip -r "joystick-gpio-$platform.zip" "$platform"
-              else
-                tar -czf "joystick-gpio-$platform.tar.gz" "$platform"
-              fi
-            fi
-          done
-
-      - name: Upload release assets
+      - name: Create GitHub Release & Upload Assets
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/*.tar.gz dist/*.zip
+          # 自动从标签名获取版本号，如推送的标签是 v1.0.0，则此处为 v1.0.0
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          # 指定包含所有二进制文件的目录
+          files: dist/**/*
+          draft: false
+          prerelease: false
+        env:
+          # 使用 GitHub 自动生成的 token 进行认证
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
