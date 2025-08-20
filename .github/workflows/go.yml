@@ -2,25 +2,18 @@ name: Go Build and Release
 
 on:
   push:
-    # 通常在主分支推送标签时触发发布，例如 v1.0.0
     tags: [ 'v*' ]
-  # 允许在 GitHub 界面手动触发工作流
   workflow_dispatch:
-  # 监听 Release 的发布事件（另一种常见触发方式）
-  release:
-    types: [published]
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      # 赋予工作流创建 Release 和上传资产的权限
       contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # 获取全部历史记录，以便 `git describe` 能正确生成版本号
           fetch-depth: 0
 
       - name: Set up Go
@@ -28,19 +21,45 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Run Makefile to build all platforms
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Build for all platforms
         run: make build-all
 
-      - name: Create GitHub Release & Upload Assets
-        uses: softprops/action-gh-release@v1
+      - name: Create compressed packages
+        run: |
+          cd dist
+          for dir in */; do
+            if [ -d "$dir" ]; then
+              platform=$(basename "$dir")
+              echo "Creating package for $platform"
+              if [[ "$platform" == *"windows"* ]]; then
+                cd "$dir" && zip -r "../joystick-gpio-$platform.zip" ./* && cd ..
+              else
+                cd "$dir" && tar -czf "../joystick-gpio-$platform.tar.gz" ./* && cd ..
+              fi
+            fi
+          done
+
+      - name: Get release ID
+        id: get_release
+        uses: actions/github-script@v7
         with:
-          # 自动从标签名获取版本号，如推送的标签是 v1.0.0，则此处为 v1.0.0
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          # 指定包含所有二进制文件的目录
-          files: dist/**/*
-          draft: false
-          prerelease: false
+          script: |
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: '${{ github.ref_name }}'
+            });
+            return release.id;
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.get_release.outputs.result }}/assets
+          asset_path: dist/joystick-gpio-${{ matrix.platform }}.tar.gz
+          asset_name: joystick-gpio-${{ matrix.platform }}.tar.gz
+          asset_content_type: application/gzip
         env:
-          # 使用 GitHub 自动生成的 token 进行认证
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
